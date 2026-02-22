@@ -133,6 +133,12 @@ cython_debug/
 data/finance.db
 !data/.gitkeep
 
+# Backup directory - old scripts and data
+backup/
+
+# Last fetch timestamp file
+.last_fetch
+
 # Import directories - may contain sensitive transaction data
 data/imports/alipay/*
 data/imports/wechat/*

@@ -59,12 +59,23 @@ class CMBEmailParser:
                 re.UNICODE
             ),
             
-            # 入账
+            # 入账（标准格式）
             'income': re.compile(
                 r'您账户\*?(\d{4})于'
                 r'(\d{2})月(\d{2})日(\d{2}):(\d{2})'
                 r'入?账'
                 r'([A-Z]{3})?\s*(\d+\.?\d*)元?',
+                re.UNICODE
+            ),
+
+            # 收款入账（带余额和备注，如微信零钱提现）
+            'income_with_balance': re.compile(
+                r'您账户\*?(\d{4})于'
+                r'(\d{2})月(\d{2})日(\d{2}):(\d{2})'
+                r'收款'
+                r'(\d+\.?\d*)元，'
+                r'余额(\d+\.?\d*)，'
+                r'备注：(.+?)(?:\n|$)',
                 re.UNICODE
             ),
             
@@ -104,6 +115,7 @@ class CMBEmailParser:
             ('quick_pay', TransactionType.CONSUMPTION),
             ('merchant_consumption', TransactionType.CONSUMPTION),
             ('consumption', TransactionType.CONSUMPTION),
+            ('income_with_balance', TransactionType.INCOME),  # 优先匹配带余额的入账格式
             ('income', TransactionType.INCOME),
             ('transfer_out', TransactionType.TRANSFER_OUT),
         ]
@@ -187,14 +199,14 @@ class CMBEmailParser:
     
     def _extract_card_tail(self, groups: tuple, pattern_name: str) -> str:
         """提取卡号尾号"""
-        if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income']:
+        if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income', 'income_with_balance']:
             return groups[0] if groups[0] else "unknown"
         return "unknown"
     
     def _extract_time(self, groups: tuple, pattern_name: str) -> datetime:
         """提取交易时间"""
         try:
-            if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income']:
+            if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income', 'income_with_balance']:
                 month, day, hour, minute = int(groups[1]), int(groups[2]), int(groups[3]), int(groups[4])
                 year = datetime.now().year
                 # 处理跨年情况
@@ -204,7 +216,7 @@ class CMBEmailParser:
                 return datetime(year, month, day, hour, minute)
         except (IndexError, ValueError) as e:
             print(f"时间解析失败: {e}")
-        
+
         return datetime.now()
     
     def _extract_amount(self, groups: tuple, pattern_name: str) -> Decimal:
@@ -216,6 +228,9 @@ class CMBEmailParser:
                 return Decimal(str(groups[7]))
             elif pattern_name in ['consumption', 'income']:
                 return Decimal(str(groups[6] if len(groups) > 6 else groups[5]))
+            elif pattern_name == 'income_with_balance':
+                # 带余额的入账格式：金额在第6组
+                return Decimal(str(groups[5]))
             elif pattern_name == 'transfer_out':
                 return Decimal(str(groups[2]))
         except (IndexError, ValueError, Decimal.InvalidOperation) as e:
@@ -226,8 +241,13 @@ class CMBEmailParser:
     def _extract_balance(self, groups: tuple, pattern_name: str, full_text: str) -> Optional[Decimal]:
         """提取余额"""
         try:
+            # 快捷支付格式：余额在第7组
             if pattern_name == 'quick_pay' and len(groups) > 7:
                 return Decimal(str(groups[7]))
+            
+            # 带余额的入账格式：余额在第6组
+            if pattern_name == 'income_with_balance' and len(groups) > 6:
+                return Decimal(str(groups[6]))
             
             # 尝试从文本中匹配余额
             balance_pattern = re.compile(r'余额[:：]?\s*(\d+\.?\d*)')
@@ -272,6 +292,29 @@ class CMBEmailParser:
                     type=CounterpartyType.PERSON,
                     category=None
                 )
+            
+            elif pattern_name == 'income_with_balance' and len(groups) > 7:
+                # 从备注字段解析对手方信息
+                remark = groups[7]
+                # 解析 "财付通-张子鸣-微信零钱提现" 格式
+                parts = remark.split('-')
+                
+                if len(parts) >= 2:
+                    provider = parts[0].strip()  # 财付通
+                    payer_name = parts[1].strip()  # 张子鸣
+                    
+                    return Counterparty(
+                        name=payer_name,
+                        type=CounterpartyType.PERSON,
+                        category=None
+                    )
+                else:
+                    # 备注格式不符合预期，使用整个备注作为对手方名
+                    return Counterparty(
+                        name=remark.strip(),
+                        type=CounterpartyType.MERCHANT,
+                        category=None
+                    )
         
         except Exception as e:
             print(f"对手方解析失败: {e}")
@@ -293,6 +336,37 @@ class CMBEmailParser:
                     provider=provider,
                     method='quick_pay'
                 )
+            
+            # 处理带余额的入账格式（如微信零钱提现）
+            if pattern_name == 'income_with_balance' and len(groups) > 7:
+                remark = groups[7]
+                parts = remark.split('-')
+                
+                if len(parts) >= 3:
+                    provider = parts[0].strip()  # 财付通
+                    # parts[1] 是付款人姓名
+                    channel_info = parts[2].strip() if len(parts) > 2 else ""
+                    
+                    # 判断渠道类型
+                    if '微信' in channel_info or '零钱' in channel_info:
+                        return PaymentChannel(
+                            name='微信零钱提现',
+                            provider=provider,
+                            method='transfer'
+                        )
+                    else:
+                        return PaymentChannel(
+                            name=channel_info,
+                            provider=provider,
+                            method='transfer'
+                        )
+                elif len(parts) == 1:
+                    # 备注只有一项，作为渠道名
+                    return PaymentChannel(
+                        name=parts[0].strip(),
+                        provider=None,
+                        method='transfer'
+                    )
             
             # 从全文匹配渠道关键词
             if '微信支付' in full_text or '财付通' in full_text:

@@ -211,6 +211,11 @@ class QQMailIMAPAdapter(DataSourceAdapter):
             email_ids = data[0].split()
             print(f"找到 {len(email_ids)} 封邮件")
             
+            # 调试：显示前几个邮件ID
+            if email_ids:
+                sample_ids = [id.decode() for id in email_ids[:5]]
+                print(f"  样本ID: {', '.join(sample_ids)}{'...' if len(email_ids) > 5 else ''}")
+            
             # 处理每封邮件
             for email_id in email_ids:
                 try:
@@ -232,7 +237,8 @@ class QQMailIMAPAdapter(DataSourceAdapter):
                     body = self._extract_body(msg)
                     
                     # 检查是否为招行邮件
-                    if not self._parser.is_cmb_email(subject, from_addr):
+                    is_cmb = self._parser.is_cmb_email(subject, from_addr)
+                    if not is_cmb:
                         continue
                     
                     # 解析交易
@@ -266,46 +272,76 @@ class QQMailIMAPAdapter(DataSourceAdapter):
     
     def _build_search_criteria(self, start_time: datetime, end_time: datetime) -> str:
         """构建 IMAP 搜索条件"""
-        # 格式化日期为 IMAP 格式 (01-Jan-2024)
-        since_str = start_time.strftime('%d-%b-%Y')
-        before_str = (end_time + timedelta(days=1)).strftime('%d-%b-%Y')
-        
-        # 搜索条件：日期范围内，未读邮件
-        criteria = f'(SINCE "{since_str}" BEFORE "{before_str}")'
-        
+        # IMAP 的 SINCE 和 BEFORE 只支持日期，不支持具体时间
+        # 为了确保不遗漏任何邮件，我们：
+        # 1. 扩大搜索范围：start_time 的日期减2天（确保跨时区也能捕获）
+        # 2. 搜索到 end_time 的日期加2天
+        # 3. 然后在 fetch_transactions 中进行精确的时间过滤
+        since_date = (start_time - timedelta(days=2)).strftime('%d-%b-%Y')
+        before_date = (end_time + timedelta(days=2)).strftime('%d-%b-%Y')
+
+        # 搜索条件：日期范围内
+        criteria = f'(SINCE "{since_date}" BEFORE "{before_date}")'
+
         return criteria
     
     def _extract_body(self, msg: email.message.Message) -> str:
         """提取邮件正文"""
         body = ""
-        
+        html_body = ""
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 content_disposition = part.get('Content-Disposition', '')
-                
+
+                # 跳过 multipart 容器本身
+                if content_type.startswith('multipart/'):
+                    continue
+
+                # 跳过附件
+                if 'attachment' in content_disposition:
+                    continue
+
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    continue
+
+                charset = part.get_content_charset() or 'utf-8'
+
                 # 优先获取纯文本
-                if content_type == "text/plain" and 'attachment' not in content_disposition:
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        charset = part.get_content_charset() or 'utf-8'
+                if content_type == "text/plain":
+                    try:
                         body = payload.decode(charset, errors='ignore')
-                        break
-                
+                        break  # 找到纯文本就退出
+                    except:
+                        pass
+
                 # 备选 HTML
-                elif content_type == "text/html" and not body:
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        charset = part.get_content_charset() or 'utf-8'
+                elif content_type == "text/html" and not html_body:
+                    try:
                         html = payload.decode(charset, errors='ignore')
-                        # 简单 HTML 转文本
-                        body = self._html_to_text(html)
+                        html_body = self._html_to_text(html)
+                    except:
+                        pass
+
+            # 如果没有纯文本，使用 HTML 转换后的文本
+            if not body and html_body:
+                body = html_body
+
         else:
+            # 非 multipart 邮件
             payload = msg.get_payload(decode=True)
             if payload:
                 charset = msg.get_content_charset() or 'utf-8'
-                body = payload.decode(charset, errors='ignore')
-        
+                content_type = msg.get_content_type()
+                try:
+                    body = payload.decode(charset, errors='ignore')
+                    if content_type == "text/html":
+                        body = self._html_to_text(body)
+                except:
+                    pass
+
         return body
     
     def _html_to_text(self, html: str) -> str:
