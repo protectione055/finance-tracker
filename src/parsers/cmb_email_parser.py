@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Dict, Any, Tuple
-from models.transaction import (
+from src.models.transaction import (
     RawTransaction, Counterparty, PaymentChannel,
     TransactionType, AccountType, CounterpartyType
 )

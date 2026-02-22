@@ -6,7 +6,7 @@
 from abc import ABC, abstractmethod
 from typing import Iterator, List, Optional, Dict, Any
 from datetime import datetime
-from models.transaction import RawTransaction
+from src.models.transaction import RawTransaction
 
 
 class DataSourceAdapter(ABC):
