@@ -111,3 +111,18 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ---
 
 *Last updated: 2026-02-22*
+
+---
+
+## 🤖 GitHub App 测试
+
+本条更新用于测试 GitHub App (nina-bot-27) 的代码提交和 Pull Request 创建功能。
+
+**测试内容：**
+- ✅ 通过 GitHub App 认证获取 Installation Token
+- ✅ 克隆仓库并创建新分支
+- ✅ 修改 README.md 文件
+- ✅ 推送分支并创建 Pull Request
+
+*This is a test commit from GitHub App automation.*
+测试完成 - GitHub App 工作正常！
