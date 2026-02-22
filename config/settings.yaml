@@ -1,0 +1,99 @@
+# Finance Tracker Configuration Template
+# Copy this file to config.yaml and fill in your settings
+
+# Application Settings
+app:
+  name: "Finance Tracker"
+  version: "1.0.0"
+  debug: false
+  timezone: "Asia/Shanghai"
+  
+# Data Storage
+data:
+  # Options: sqlite, postgresql, mysql
+  backend: "sqlite"
+  
+  # SQLite settings
+  sqlite:
+    path: "./data/finance.db"
+    
+  # PostgreSQL settings (uncomment if using postgres)
+  # postgresql:
+  #   host: "localhost"
+  #   port: 5432
+  #   database: "finance"
+  #   username: "your_username"
+  #   password: "your_password"
+
+# Data Sources
+sources:
+  # Alipay export settings
+  alipay:
+    enabled: true
+    export_path: "./data/imports/alipay/"
+    auto_import: false
+    
+  # WeChat Pay export settings
+  wechat_pay:
+    enabled: true
+    export_path: "./data/imports/wechat/"
+    auto_import: false
+    
+  # Bank CSV imports
+  banks:
+    enabled: false
+    supported_formats:
+      - "csv"
+      - "xlsx"
+    import_path: "./data/imports/banks/"
+
+# Analysis Settings
+analysis:
+  # Monthly budget (set to 0 to disable)
+  monthly_budget: 0
+  
+  # Categories to track
+  categories:
+    - "餐饮"          # Food & Dining
+    - "交通"          # Transportation
+    - "购物"          # Shopping
+    - "娱乐"          # Entertainment
+    - "住房"          # Housing
+    - "医疗"          # Healthcare
+    - "教育"          # Education
+    - "其他"          # Others
+  
+  # Alert settings
+  alerts:
+    overspend_warning: true    # Warn when approaching budget
+    abnormal_spending: true     # Alert on unusual transactions
+
+# Reporting
+reports:
+  enabled: true
+  # Output formats: markdown, html, pdf
+  formats:
+    - "markdown"
+  # Report schedule (cron format, empty to disable)
+  schedule: ""
+  # Email delivery settings (optional)
+  # email:
+  #   smtp_server: "smtp.gmail.com"
+  #   smtp_port: 587
+  #   username: "your_email@gmail.com"
+  #   password: "your_app_password"
+  #   to_address: "recipient@example.com"
+
+# Feishu Integration (Optional)
+feishu:
+  enabled: false
+  # webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+  # app_id: "your_app_id"
+  # app_secret: "your_app_secret"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "./logs/finance-tracker.log"
+  max_size: "10MB"
+  backup_count: 5

@@ -1,0 +1,42 @@
+# Example Configuration
+# Copy this file to config.yaml and fill in your actual values
+
+app:
+  name: "My Finance Tracker"
+  debug: false
+  timezone: "Asia/Shanghai"
+
+data:
+  backend: "sqlite"
+  sqlite:
+    path: "./data/finance.db"
+
+sources:
+  alipay:
+    enabled: true
+    export_path: "./data/imports/alipay/"
+  wechat_pay:
+    enabled: true
+    export_path: "./data/imports/wechat/"
+
+analysis:
+  monthly_budget: 5000
+  categories:
+    - "餐饮"
+    - "交通"
+    - "购物"
+    - "娱乐"
+    - "住房"
+    - "其他"
+  alerts:
+    overspend_warning: true
+    abnormal_spending: true
+
+reports:
+  enabled: true
+  formats:
+    - "markdown"
+
+logging:
+  level: "INFO"
+  file: "./logs/finance-tracker.log"
