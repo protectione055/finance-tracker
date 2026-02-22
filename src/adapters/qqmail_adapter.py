@@ -9,12 +9,12 @@ import email
 import email.policy
 from datetime import datetime, timedelta
 from typing import Iterator, Optional, Dict, Any, List
-from adapters.base import (
+from src.adapters.base import (
     DataSourceAdapter, ConnectionError, AuthenticationError,
     ParseError, RateLimitError
 )
-from models.transaction import RawTransaction
-from parsers.cmb_email_parser import CMBEmailParser
+from src.models.transaction import RawTransaction
+from src.parsers.cmb_email_parser import CMBEmailParser
 
 
 class QQMailIMAPAdapter(DataSourceAdapter):
