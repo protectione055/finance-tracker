@@ -151,3 +151,15 @@ config/*.local.yaml
 # Keep example configs
 !config/config.example.yaml
 !config/settings.yaml
+
+# Backup directory
+backup/
+
+# Runtime state files
+.last_fetch
+
+# Database files (contains personal financial data)
+*.db
+*.db-journal
+data/*.db
+!data/.gitkeep
