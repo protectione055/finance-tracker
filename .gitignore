@@ -98,9 +98,9 @@ celerybeat.pid
 # Environments
 .env
 .venv
-env/
 venv/
 ENV/
+env/
 env.bak/
 venv.bak/
 
@@ -142,7 +142,7 @@ data/imports/banks/*
 !data/imports/banks/.gitkeep
 
 # Logs
-logs/*.log
+logs/
 
 # Configuration - may contain sensitive data
 config/config.yaml

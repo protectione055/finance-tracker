@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from contextlib import contextmanager
 
-from models.transaction import RawTransaction
+from src.storage.schema import ACCOUNTS_TABLE_SQL
+
+from src.models.transaction import RawTransaction
 
 
 class TransactionRepository:
@@ -26,8 +28,11 @@ class TransactionRepository:
         """初始化数据库表结构"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            
-            # 主交易表
+
+            # 账户表（先创建，供交易表外键引用）
+            cursor.execute(ACCOUNTS_TABLE_SQL)
+
+            # 主交易表（包含 accounts 外键）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +50,7 @@ class TransactionRepository:
                     
                     -- 账户信息
                     account_id TEXT NOT NULL,
+                    account_pk INTEGER,
                     account_type TEXT,
                     account_name TEXT,
                     
@@ -80,7 +86,9 @@ class TransactionRepository:
                     
                     -- 索引字段
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    
+                    FOREIGN KEY (account_pk) REFERENCES accounts(id)
                 )
             ''')
             
@@ -128,15 +136,175 @@ class TransactionRepository:
                     UNIQUE(source_type, source_id)
                 )
             ''')
-            
+
             conn.commit()
             print("[✓] 数据库初始化完成")
+
+        self._ensure_accounts_columns()
+        self._ensure_transactions_account_fk()
+
+    def _ensure_accounts_columns(self) -> None:
+        """确保 accounts 表存在必要字段"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(accounts)")
+            cols = [r[1] for r in cursor.fetchall()]
+            if "last_sync_time" not in cols:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN last_sync_time DATETIME")
+            if "current_balance" not in cols:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN current_balance DECIMAL(15, 2)")
+            conn.commit()
+
+    def _ensure_transactions_account_fk(self) -> None:
+        """
+        确保 transactions 表存在 account_pk 外键字段并完成回填
+        若缺少外键约束，则重建表结构并迁移数据
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("PRAGMA table_info(transactions)")
+            cols = [r[1] for r in cursor.fetchall()]
+            if "account_pk" not in cols:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN account_pk INTEGER")
+
+            cursor.execute("SELECT DISTINCT account_id FROM transactions")
+            for (account_id,) in cursor.fetchall():
+                if not account_id:
+                    continue
+                cursor.execute(
+                    "INSERT OR IGNORE INTO accounts (account_id) VALUES (?)",
+                    (account_id,),
+                )
+
+            cursor.execute(
+                """
+                UPDATE transactions
+                SET account_pk = (
+                    SELECT id FROM accounts WHERE accounts.account_id = transactions.account_id
+                )
+                WHERE account_pk IS NULL
+                """
+            )
+
+            cursor.execute("PRAGMA foreign_key_list(transactions)")
+            fk_list = cursor.fetchall()
+            has_fk = any(row[3] == "account_pk" and row[2] == "accounts" for row in fk_list)
+            if not has_fk:
+                self._rebuild_transactions_with_fk(conn)
+
+            conn.commit()
+
+    def _rebuild_transactions_with_fk(self, conn: sqlite3.Connection) -> None:
+        """重建 transactions 表以添加外键约束"""
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=OFF")
+
+        cursor.execute("ALTER TABLE transactions RENAME TO transactions_old")
+
+        cursor.execute('''
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_id TEXT UNIQUE NOT NULL,
+                
+                source_type TEXT NOT NULL,
+                source_account TEXT NOT NULL,
+                raw_id TEXT,
+                
+                transaction_time DATETIME NOT NULL,
+                record_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timezone TEXT DEFAULT 'Asia/Shanghai',
+                
+                account_id TEXT NOT NULL,
+                account_pk INTEGER,
+                account_type TEXT,
+                account_name TEXT,
+                
+                transaction_type TEXT NOT NULL,
+                amount DECIMAL(15, 2) NOT NULL,
+                currency TEXT DEFAULT 'CNY',
+                balance DECIMAL(15, 2),
+                
+                counterparty_name TEXT,
+                counterparty_type TEXT,
+                counterparty_category TEXT,
+                
+                channel_name TEXT,
+                channel_provider TEXT,
+                channel_method TEXT,
+                
+                location_city TEXT,
+                location_country TEXT,
+                
+                metadata TEXT,
+                raw_data TEXT,
+                tags TEXT,
+                notes TEXT,
+                
+                status TEXT DEFAULT 'confirmed',
+                verification_status TEXT DEFAULT 'unverified',
+                
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                
+                FOREIGN KEY (account_pk) REFERENCES accounts(id)
+            )
+        ''')
+
+        cursor.execute('''
+            INSERT INTO transactions (
+                id, transaction_id, source_type, source_account, raw_id,
+                transaction_time, record_time, timezone,
+                account_id, account_pk, account_type, account_name,
+                transaction_type, amount, currency, balance,
+                counterparty_name, counterparty_type, counterparty_category,
+                channel_name, channel_provider, channel_method,
+                location_city, location_country,
+                metadata, raw_data, tags, notes,
+                status, verification_status,
+                created_at, updated_at
+            )
+            SELECT
+                id, transaction_id, source_type, source_account, raw_id,
+                transaction_time, record_time, timezone,
+                account_id, account_pk, account_type, account_name,
+                transaction_type, amount, currency, balance,
+                counterparty_name, counterparty_type, counterparty_category,
+                channel_name, channel_provider, channel_method,
+                location_city, location_country,
+                metadata, raw_data, tags, notes,
+                status, verification_status,
+                created_at, updated_at
+            FROM transactions_old
+        ''')
+
+        cursor.execute("DROP TABLE transactions_old")
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transactions_time 
+            ON transactions(transaction_time)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transactions_account 
+            ON transactions(account_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transactions_type 
+            ON transactions(transaction_type)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transactions_source 
+            ON transactions(source_type, source_account)
+        ''')
+
+        cursor.execute("PRAGMA foreign_keys=ON")
     
     @contextmanager
     def _get_connection(self):
         """获取数据库连接（上下文管理器）"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
         finally:
@@ -164,8 +332,15 @@ class TransactionRepository:
                 if cursor.fetchone():
                     return False, "duplicate"
                 
+                account_pk = self._ensure_account(
+                    account_id=transaction.account_id,
+                    account_name=transaction.account_name,
+                    account_type=transaction.account_type,
+                )
+
                 # 准备数据
                 data = self._transaction_to_db_dict(transaction, transaction_id)
+                data['account_pk'] = account_pk
                 
                 # 插入数据
                 columns = ', '.join(data.keys())
@@ -177,6 +352,13 @@ class TransactionRepository:
                 ''', list(data.values()))
                 
                 conn.commit()
+                self.update_account_last_sync_time(
+                    account_id=transaction.account_id,
+                    last_sync_time=transaction.transaction_time,
+                    account_name=transaction.account_name,
+                    account_type=transaction.account_type,
+                )
+                self._sync_current_balance(transaction)
                 return True, "saved"
                 
             except sqlite3.IntegrityError as e:
@@ -197,6 +379,7 @@ class TransactionRepository:
             'transaction_time': transaction.transaction_time.isoformat(),
             'timezone': transaction.timezone,
             'account_id': transaction.account_id,
+            'account_pk': None,
             'account_type': transaction.account_type,
             'account_name': transaction.account_name,
             'transaction_type': transaction.transaction_type,
@@ -273,3 +456,192 @@ class TransactionRepository:
             rows = cursor.fetchall()
             
             return [dict(row) for row in rows]
+
+    def get_last_sync_time(self, account_id: str) -> Optional[datetime]:
+        """获取指定账户的最后同步时间"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT last_sync_time FROM accounts WHERE account_id = ?",
+                (account_id,),
+            )
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return None
+            try:
+                return datetime.fromisoformat(row[0])
+            except Exception:
+                return None
+
+    def get_single_account_last_sync_time(self) -> Tuple[Optional[str], Optional[datetime]]:
+        """
+        若 accounts 表仅有一条记录，返回其 account_id 与 last_sync_time
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT account_id, last_sync_time FROM accounts")
+            rows = cursor.fetchall()
+            if len(rows) != 1:
+                return None, None
+            account_id, last_sync_time = rows[0][0], rows[0][1]
+            if not last_sync_time:
+                return account_id, None
+            try:
+                return account_id, datetime.fromisoformat(last_sync_time)
+            except Exception:
+                return account_id, None
+
+    def update_account_last_sync_time(
+        self,
+        account_id: str,
+        last_sync_time: datetime,
+        account_name: Optional[str] = None,
+        account_type: Optional[str] = None,
+    ) -> None:
+        """更新账户的最后同步时间（不存在则创建）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO accounts (account_id, account_name, account_type)
+                VALUES (?, ?, ?)
+                """,
+                (account_id, account_name, account_type),
+            )
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET last_sync_time = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    account_name = COALESCE(account_name, ?),
+                    account_type = COALESCE(account_type, ?)
+                WHERE account_id = ?
+                  AND (last_sync_time IS NULL OR last_sync_time < ?)
+                """,
+                (
+                    last_sync_time.isoformat(),
+                    account_name,
+                    account_type,
+                    account_id,
+                    last_sync_time.isoformat(),
+                ),
+            )
+            conn.commit()
+
+    def update_account_current_balance(
+        self,
+        account_id: str,
+        current_balance: Decimal,
+        account_name: Optional[str] = None,
+        account_type: Optional[str] = None,
+    ) -> None:
+        """更新账户当前余额（不存在则创建）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO accounts (account_id, account_name, account_type)
+                VALUES (?, ?, ?)
+                """,
+                (account_id, account_name, account_type),
+            )
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET current_balance = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    account_name = COALESCE(account_name, ?),
+                    account_type = COALESCE(account_type, ?)
+                WHERE account_id = ?
+                """,
+                (str(current_balance), account_name, account_type, account_id),
+            )
+            conn.commit()
+
+    def _sync_current_balance(self, transaction: RawTransaction) -> None:
+        """
+        同步 accounts.current_balance：
+        1) 若交易自带 balance，则直接使用
+        2) 否则按交易类型增减（基于当前余额，默认 0）
+        """
+        if transaction.balance is not None:
+            self.update_account_current_balance(
+                account_id=transaction.account_id,
+                current_balance=transaction.balance,
+                account_name=transaction.account_name,
+                account_type=transaction.account_type,
+            )
+            return
+
+        # 无 balance 时按交易类型增减
+        delta = self._infer_balance_delta(transaction)
+        if delta is None:
+            return
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT current_balance FROM accounts WHERE account_id = ?",
+                (transaction.account_id,),
+            )
+            row = cursor.fetchone()
+            current = Decimal(str(row[0])) if row and row[0] is not None else Decimal("0")
+
+        new_balance = current + delta
+        self.update_account_current_balance(
+            account_id=transaction.account_id,
+            current_balance=new_balance,
+            account_name=transaction.account_name,
+            account_type=transaction.account_type,
+        )
+
+    def _infer_balance_delta(self, transaction: RawTransaction) -> Optional[Decimal]:
+        """根据交易类型推断余额变化"""
+        tx_type = transaction.transaction_type
+        amount = transaction.amount
+        if amount is None:
+            return None
+
+        # 支出类
+        if tx_type in {"consumption", "transfer_out", "fee"}:
+            return Decimal("0") - amount
+
+        # 收入类
+        if tx_type in {"income", "transfer_in", "refund", "interest", "dividend"}:
+            return amount
+
+        return None
+
+    def _ensure_account(
+        self,
+        account_id: str,
+        account_name: Optional[str] = None,
+        account_type: Optional[str] = None,
+    ) -> Optional[int]:
+        """确保账户存在并返回主键"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO accounts (account_id, account_name, account_type)
+                VALUES (?, ?, ?)
+                """,
+                (account_id, account_name, account_type),
+            )
+            cursor.execute(
+                """
+                UPDATE accounts
+                SET account_name = COALESCE(account_name, ?),
+                    account_type = COALESCE(account_type, ?),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE account_id = ?
+                """,
+                (account_name, account_type, account_id),
+            )
+            cursor.execute(
+                "SELECT id FROM accounts WHERE account_id = ?",
+                (account_id,),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return row[0] if row else None

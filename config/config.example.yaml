@@ -1,42 +1,60 @@
-# Example Configuration
-# Copy this file to config.yaml and fill in your actual values
+# Finance Tracker 配置文件示例
+# 复制此文件为 config.yaml 并填写实际值
 
+# 应用设置
 app:
-  name: "My Finance Tracker"
-  debug: false
+  name: "Finance Tracker"
   timezone: "Asia/Shanghai"
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
 
-data:
-  backend: "sqlite"
+# 数据库设置
+database:
+  type: "sqlite"  # sqlite, postgresql
   sqlite:
     path: "./data/finance.db"
+  # postgresql:
+  #   host: "localhost"
+  #   port: 5432
+  #   database: "finance"
+  #   username: "user"
+  #   password: "password"
 
+# 数据源设置
 sources:
-  alipay:
+  # QQ 邮箱 - 招商银行动账通知
+  qqmail:
     enabled: true
-    export_path: "./data/imports/alipay/"
-  wechat_pay:
-    enabled: true
-    export_path: "./data/imports/wechat/"
+    # QQ 邮箱地址
+    username: "your_qq@qq.com"
+    # 授权码（不是邮箱密码）
+    # 获取方式：QQ邮箱 -> 设置 -> 账户 -> 开启IMAP/SMTP服务
+    auth_code: "your_auth_code_here"
+    # 账户过滤（如卡号尾号），用于按账户同步
+    # 留空则不限制
+    account_id: ""
+    # IMAP 服务器设置
+    imap_server: "imap.qq.com"
+    imap_port: 993
+    use_ssl: true
+    # 同步设置
+    sync:
+      # 自动同步间隔（分钟）
+      interval: 60
+      # 默认拉取天数
+      default_days: 7
+      # 是否标记邮件为已读
+      mark_as_read: false
 
-analysis:
-  monthly_budget: 5000
-  categories:
-    - "餐饮"
-    - "交通"
-    - "购物"
-    - "娱乐"
-    - "住房"
-    - "其他"
-  alerts:
-    overspend_warning: true
-    abnormal_spending: true
-
-reports:
+# 同步调度设置
+scheduler:
+  # 是否启用自动同步
   enabled: true
-  formats:
-    - "markdown"
+  # 检查间隔（秒）
+  check_interval: 60
 
+# 日志设置
 logging:
   level: "INFO"
   file: "./logs/finance-tracker.log"
+  max_size: "10MB"
+  backup_count: 5

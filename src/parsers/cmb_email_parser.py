@@ -67,6 +67,14 @@ class CMBEmailParser:
                 r'([A-Z]{3})?\s*(\d+\.?\d*)元?',
                 re.UNICODE
             ),
+            # 收款
+            'income_receive': re.compile(
+                r'您账户\*?(\d{4})于'
+                r'(\d{2})月(\d{2})日(\d{2}):(\d{2})'
+                r'收款'
+                r'([A-Z]{3})?\s*(\d+\.?\d*)元?',
+                re.UNICODE
+            ),
             
             # 转账支出
             'transfer_out': re.compile(
@@ -105,6 +113,7 @@ class CMBEmailParser:
             ('merchant_consumption', TransactionType.CONSUMPTION),
             ('consumption', TransactionType.CONSUMPTION),
             ('income', TransactionType.INCOME),
+            ('income_receive', TransactionType.INCOME),
             ('transfer_out', TransactionType.TRANSFER_OUT),
         ]
         
@@ -187,14 +196,14 @@ class CMBEmailParser:
     
     def _extract_card_tail(self, groups: tuple, pattern_name: str) -> str:
         """提取卡号尾号"""
-        if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income']:
+        if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income', 'income_receive']:
             return groups[0] if groups[0] else "unknown"
         return "unknown"
     
     def _extract_time(self, groups: tuple, pattern_name: str) -> datetime:
         """提取交易时间"""
         try:
-            if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income']:
+            if pattern_name in ['quick_pay', 'merchant_consumption', 'consumption', 'income', 'income_receive']:
                 month, day, hour, minute = int(groups[1]), int(groups[2]), int(groups[3]), int(groups[4])
                 year = datetime.now().year
                 # 处理跨年情况
@@ -214,7 +223,7 @@ class CMBEmailParser:
                 return Decimal(str(groups[6]))
             elif pattern_name in ['merchant_consumption']:
                 return Decimal(str(groups[7]))
-            elif pattern_name in ['consumption', 'income']:
+            elif pattern_name in ['consumption', 'income', 'income_receive']:
                 return Decimal(str(groups[6] if len(groups) > 6 else groups[5]))
             elif pattern_name == 'transfer_out':
                 return Decimal(str(groups[2]))

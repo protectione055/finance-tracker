@@ -1,6 +1,6 @@
 """
-积蓄/余额追踪器
-用于记录和追踪各账户的余额变化
+净资产追踪器
+基于 accounts.current_balance 计算净资产
 """
 
 import sqlite3
@@ -11,16 +11,16 @@ from typing import List, Optional, Dict, Any
 from pathlib import Path
 from contextlib import contextmanager
 
+from src.storage.schema import ACCOUNTS_TABLE_SQL
+
 
 class BalanceTracker:
     """
-    余额追踪器
+    净资产追踪器
     
     功能：
-    1. 记录各账户的余额历史
-    2. 追踪总积蓄变化
-    3. 生成余额趋势报表
-    4. 计算净资产
+    1. 基于 accounts.current_balance 计算净资产
+    2. 记录净资产历史
     """
     
     def __init__(self, db_path: str = "./data/finance.db"):
@@ -32,24 +32,6 @@ class BalanceTracker:
         """初始化余额追踪表"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            
-            # 账户余额历史表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS account_balances (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_id TEXT NOT NULL,
-                    account_name TEXT,
-                    account_type TEXT,  -- debit/credit/wallet/investment
-                    balance DECIMAL(15, 2) NOT NULL,
-                    currency TEXT DEFAULT 'CNY',
-                    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    source_transaction_id TEXT,  -- 关联的交易记录ID
-                    notes TEXT,
-                    
-                    -- 索引
-                    UNIQUE(account_id, recorded_at)
-                )
-            ''')
             
             # 总积蓄/净资产历史表
             cursor.execute('''
@@ -67,30 +49,8 @@ class BalanceTracker:
             ''')
             
             # 账户配置表（用于管理账户信息）
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS accounts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_id TEXT UNIQUE NOT NULL,
-                    account_name TEXT,
-                    account_type TEXT,  -- debit/credit/wallet/investment/loan
-                    institution TEXT,   -- 发卡机构：招商银行/支付宝等
-                    currency TEXT DEFAULT 'CNY',
-                    is_active BOOLEAN DEFAULT 1,
-                    is_included_in_net_worth BOOLEAN DEFAULT 1,  -- 是否计入净资产
-                    credit_limit DECIMAL(15, 2),  -- 信用额度（信用卡用）
-                    opened_at DATE,
-                    closed_at DATE,
-                    notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+            cursor.execute(ACCOUNTS_TABLE_SQL)
             
-            # 创建索引
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_balances_account 
-                ON account_balances(account_id, recorded_at)
-            ''')
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_net_worth_date 
                 ON net_worth_history(calculated_at)
@@ -108,61 +68,6 @@ class BalanceTracker:
             yield conn
         finally:
             conn.close()
-    
-    def record_balance(
-        self,
-        account_id: str,
-        balance: Decimal,
-        recorded_at: Optional[datetime] = None,
-        account_name: Optional[str] = None,
-        account_type: Optional[str] = None,
-        source_transaction_id: Optional[str] = None,
-        notes: Optional[str] = None
-    ) -> bool:
-        """
-        记录账户余额
-        
-        Args:
-            account_id: 账户标识（如卡号尾号）
-            balance: 余额
-            recorded_at: 记录时间（默认当前时间）
-            account_name: 账户名称
-            account_type: 账户类型
-            source_transaction_id: 来源交易ID
-            notes: 备注
-        
-        Returns:
-            是否成功
-        """
-        if recorded_at is None:
-            recorded_at = datetime.now()
-        
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            try:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO account_balances
-                    (account_id, account_name, account_type, balance, recorded_at,
-                     source_transaction_id, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    account_id,
-                    account_name,
-                    account_type,
-                    str(balance),
-                    recorded_at.isoformat(),
-                    source_transaction_id,
-                    notes
-                ))
-                
-                conn.commit()
-                return True
-                
-            except Exception as e:
-                print(f"[✗] 记录余额失败: {e}")
-                conn.rollback()
-                return False
     
     def calculate_net_worth(
         self,
@@ -186,22 +91,17 @@ class BalanceTracker:
             cursor = conn.cursor()
             
             try:
-                # 获取所有账户的最新余额
+                # 获取所有账户的当前余额
                 cursor.execute('''
                     SELECT 
-                        ab.account_id,
-                        ab.account_name,
-                        ab.account_type,
-                        ab.balance,
-                        ab.recorded_at
-                    FROM account_balances ab
-                    INNER JOIN (
-                        SELECT account_id, MAX(recorded_at) as max_time
-                        FROM account_balances
-                        GROUP BY account_id
-                    ) latest ON ab.account_id = latest.account_id 
-                        AND ab.recorded_at = latest.max_time
-                    ORDER BY ab.account_id
+                        account_id,
+                        account_name,
+                        account_type,
+                        current_balance AS balance,
+                        updated_at AS recorded_at
+                    FROM accounts
+                    WHERE current_balance IS NOT NULL
+                    ORDER BY account_id
                 ''')
                 
                 rows = cursor.fetchall()
@@ -269,56 +169,6 @@ class BalanceTracker:
                 conn.rollback()
                 return None
     
-    def get_balance_history(
-        self,
-        account_id: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        获取余额历史
-        
-        Args:
-            account_id: 账户ID（可选）
-            start_time: 开始时间
-            end_time: 结束时间
-            limit: 限制条数
-        
-        Returns:
-            余额历史记录列表
-        """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 构建查询条件
-            conditions = []
-            params = []
-            
-            if account_id:
-                conditions.append('account_id = ?')
-                params.append(account_id)
-            
-            if start_time:
-                conditions.append('recorded_at >= ?')
-                params.append(start_time.isoformat())
-            
-            if end_time:
-                conditions.append('recorded_at <= ?')
-                params.append(end_time.isoformat())
-            
-            # 构建 SQL
-            sql = 'SELECT * FROM account_balances'
-            if conditions:
-                sql += ' WHERE ' + ' AND '.join(conditions)
-            sql += ' ORDER BY recorded_at DESC LIMIT ?'
-            params.append(limit)
-            
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-            
-            return [dict(row) for row in rows]
-    
     def get_net_worth_history(
         self,
         start_time: Optional[datetime] = None,
@@ -376,59 +226,7 @@ class BalanceTracker:
             return result
 
 
-def demo():
-    """演示如何使用余额追踪器"""
-    print("=" * 60)
-    print("余额追踪器演示")
-    print("=" * 60)
-    print()
-    
-    tracker = BalanceTracker("./data/finance.db")
-    
-    # 示例：记录一些余额
-    from decimal import Decimal
-    
-    print("[→] 记录账户余额...")
-    
-    # 记录招行账户余额
-    tracker.record_balance(
-        account_id="8551",
-        balance=Decimal("100638.62"),
-        account_name="招商银行借记卡",
-        account_type="debit",
-        notes="初始余额"
-    )
-    
-    print("  [✓] 已记录: 8551 - 100638.62元")
-    
-    # 计算并记录净资产
-    print("\n[→] 计算净资产...")
-    
-    net_worth = tracker.calculate_net_worth(
-        notes="首次计算"
-    )
-    
-    if net_worth:
-        print(f"  [✓] 净资产计算完成")
-        print(f"      总资产: {net_worth['total_assets']} 元")
-        print(f"      总负债: {net_worth['total_liabilities']} 元")
-        print(f"      净资产: {net_worth['net_worth']} 元")
-        print(f"      账户数: {net_worth['account_count']} 个")
-    
-    # 查询余额历史
-    print("\n[→] 查询余额历史...")
-    
-    balances = tracker.get_balance_history(
-        account_id="8551",
-        limit=10
-    )
-    
-    print(f"  [✓] 找到 {len(balances)} 条记录")
-    for b in balances:
-        print(f"      {b['recorded_at']}: {b['balance']} 元")
-    
-    print("\n[✓] 演示完成！")
-
-
 if __name__ == "__main__":
-    demo()
+    tracker = BalanceTracker("./data/finance.db")
+    net_worth = tracker.calculate_net_worth(notes="manual run")
+    print(net_worth)
