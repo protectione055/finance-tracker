@@ -1,0 +1,3 @@
+interface:
+  display_name: "Finance Tracker CLI+Tracker"
+  short_description: "Sync, query, and analyze personal spending flows"

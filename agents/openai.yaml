@@ -1,0 +1,3 @@
+interface:
+  display_name: "Finance Tracker"
+  short_description: "Fetch and query personal spending via cli.py"
